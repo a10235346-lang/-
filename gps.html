@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>해양 모니터링 GPS 현장 기록기</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 모바일 터치 하이라이트 제거 및 빠른 반응 */
+        * { -webkit-tap-highlight-color: transparent; }
+        .tap-active:active { transform: scale(0.98); opacity: 0.9; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen pb-12 font-sans selection:bg-cyan-500 selection:text-white">
+
+    <div class="max-w-md mx-auto px-4 py-4 space-y-4">
+        
+        <!-- Header -->
+        <header class="flex items-center justify-between border-b border-slate-700/80 pb-3">
+            <div>
+                <h1 class="text-xl font-black text-cyan-400 tracking-tight flex items-center gap-2">
+                    <span>🌊</span> 선상 잘피 모니터링
+                </h1>
+                <p class="text-xs text-slate-400">학생 연구자용 현장 정점 기록기</p>
+            </div>
+            <span id="storageCountBadge" class="bg-cyan-900/60 text-cyan-300 text-xs px-2.5 py-1 rounded-full border border-cyan-700/50 font-bold">
+                0개 저장됨
+            </span>
+        </header>
+
+        <!-- Environment & Permission Status Alert -->
+        <div id="envBanner" class="hidden rounded-xl p-3 text-xs leading-relaxed border transition-all"></div>
+
+        <!-- 1. Real-time GPS Monitor Card -->
+        <div class="bg-slate-800/90 rounded-2xl p-4 border border-slate-700 shadow-xl backdrop-blur-sm">
+            <div class="flex items-center justify-between mb-3">
+                <span class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <span id="gpsPulseDot" class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
+                    실시간 위성 수신 현황
+                </span>
+                <span id="gpsFixStatus" class="text-xs font-semibold text-slate-400">수신 대기중</span>
+            </div>
+
+            <!-- Big Coordinate Display -->
+            <div class="grid grid-cols-2 gap-2 bg-slate-950/80 rounded-xl p-3 border border-slate-800/80">
+                <div class="space-y-0.5">
+                    <div class="text-[11px] font-semibold text-slate-400">위도 (Latitude)</div>
+                    <div id="liveLat" class="text-lg font-mono font-bold text-cyan-300 truncate">--.------</div>
+                </div>
+                <div class="space-y-0.5">
+                    <div class="text-[11px] font-semibold text-slate-400">경도 (Longitude)</div>
+                    <div id="liveLon" class="text-lg font-mono font-bold text-cyan-300 truncate">---.------</div>
+                </div>
+                <div class="col-span-2 pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs">
+                    <span class="text-slate-400">수평 오차 범위 (Accuracy):</span>
+                    <span id="liveAcc" class="font-mono font-bold text-amber-400">측정 전</span>
+                </div>
+            </div>
+
+            <!-- GPS Control Button -->
+            <button id="btnGpsToggle" onclick="toggleGpsTracking()" 
+                    class="mt-3 w-full py-3.5 bg-cyan-600 hover:bg-cyan-500 rounded-xl font-bold text-sm tracking-wide shadow-lg shadow-cyan-950/50 flex items-center justify-center gap-2 tap-active transition-all">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
+                <span id="btnGpsText">실시간 GPS 켜기 / 갱신</span>
+            </button>
+        </div>
+
+        <!-- 2. Station Point Input Card -->
+        <div class="bg-slate-800/90 rounded-2xl p-4 border border-slate-700 shadow-xl space-y-3">
+            <div class="flex items-center justify-between">
+                <span class="text-sm font-bold text-slate-200">📍 정점 정보 기록</span>
+                <button type="button" onclick="toggleManualInput()" class="text-xs text-cyan-400 underline decoration-dotted">
+                    좌표 직접 수동입력
+                </button>
+            </div>
+
+            <!-- Manual Coordinate Fallback (Hidden by default) -->
+            <div id="manualInputBox" class="hidden grid grid-cols-2 gap-2 p-3 bg-slate-900/90 rounded-xl border border-amber-500/40">
+                <div>
+                    <label class="text-[11px] text-amber-400 block mb-1">수동 위도</label>
+                    <input type="number" step="any" id="manualLat" placeholder="34.8XXXXX" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs font-mono text-white focus:outline-none focus:border-amber-400">
+                </div>
+                <div>
+                    <label class="text-[11px] text-amber-400 block mb-1">수동 경도</label>
+                    <input type="number" step="any" id="manualLon" placeholder="128.4XXXXX" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs font-mono text-white focus:outline-none focus:border-amber-400">
+                </div>
+                <div class="col-span-2 text-[10px] text-amber-300/80">
+                    * GPS 차단 환경이나 타 기기 좌표를 입력할 때 사용하세요.
+                </div>
+            </div>
+
+            <!-- Station ID & Preset -->
+            <div class="grid grid-cols-3 gap-2">
+                <div class="col-span-1">
+                    <label class="text-xs text-slate-400 block mb-1">정점 번호</label>
+                    <input type="text" id="stationId" value="St.1" 
+                           class="w-full bg-slate-950 border border-slate-700 rounded-xl py-2.5 px-3 text-sm font-bold text-center text-cyan-300 focus:outline-none focus:border-cyan-500">
+                </div>
+                <div class="col-span-2">
+                    <label class="text-xs text-slate-400 block mb-1">잘피 상태 (간편 태그)</label>
+                    <select id="seagrassStatus" class="w-full bg-slate-950 border border-slate-700 rounded-xl py-2.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-cyan-500">
+                        <option value="고밀도 군락 (밀생)">고밀도 군락 (밀생)</option>
+                        <option value="중간 밀도 (산발적)">중간 밀도 (산발적)</option>
+                        <option value="저밀도/외곽 경계">저밀도 / 외곽 경계</option>
+                        <option value="잘피 없음 (모래/뻘)">잘피 없음 (바닥 노출)</option>
+                        <option value="직접 입력">직접 메모로 작성</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Field Note Input -->
+            <div>
+                <label class="text-xs text-slate-400 block mb-1">현장 메모 / 추정 폭 / 특이사항</label>
+                <textarea id="fieldNote" rows="2" placeholder="예: 폴대 카메라 확인 결과 잎 길이 약 80cm, 부유물 다소 있음" 
+                          class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500"></textarea>
+            </div>
+
+            <!-- Big Record Button -->
+            <button onclick="recordStationPoint()" 
+                    class="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-base shadow-lg shadow-emerald-950/60 flex items-center justify-center gap-2 tap-active transition-all">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                </svg>
+                현재 위치 & 정점 저장하기
+            </button>
+        </div>
+
+        <!-- 3. Export & Action Bar -->
+        <div class="grid grid-cols-2 gap-2">
+            <button onclick="exportToCSV()" 
+                    class="py-3.5 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold text-xs text-white shadow-md flex items-center justify-center gap-1.5 tap-active">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                </svg>
+                엑셀 CSV 내보내기
+            </button>
+            <button onclick="confirmClearRecords()" 
+                    class="py-3.5 bg-slate-800 hover:bg-rose-900/40 text-slate-400 hover:text-rose-300 border border-slate-700 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 tap-active">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                </svg>
+                전체 초기화
+            </button>
+        </div>
+
+        <!-- 4. Saved Log Feed -->
+        <div class="bg-slate-800/90 rounded-2xl p-4 border border-slate-700 shadow-xl space-y-3">
+            <div class="flex items-center justify-between text-xs border-b border-slate-700 pb-2">
+                <span class="font-bold text-slate-300">📋 저장된 정점 목록</span>
+                <span id="logSummary" class="text-slate-400 font-mono">0건</span>
+            </div>
+            
+            <div id="recordsContainer" class="space-y-2 max-h-72 overflow-y-auto pr-1">
+                <!-- Recorded items injected here -->
+                <div class="text-center py-8 text-xs text-slate-500">
+                    아직 저장된 정점이 없습니다.<br>위 버튼을 눌러 첫 번째 정점을 기록하세요.
+                </div>
+            </div>
+        </div>
+
+        <!-- Custom Notification Modal (No alert()) -->
+        <div id="noticeModal" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="bg-slate-800 border border-slate-700 w-full max-w-sm rounded-2xl p-5 shadow-2xl text-center space-y-3">
+                <div id="noticeIcon" class="text-3xl">ℹ️</div>
+                <h3 id="noticeTitle" class="text-base font-bold text-white">알림</h3>
+                <p id="noticeMsg" class="text-xs text-slate-300 leading-relaxed break-keep"></p>
+                <div id="noticeActions" class="pt-2">
+                    <button onclick="closeNoticeModal()" class="w-full py-2.5 bg-cyan-600 rounded-xl text-xs font-bold text-white tap-active">
+                        확인
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- State Management ---
+        let currentPosition = null;
+        let watchId = null;
+        let isTracking = false;
+        const STORAGE_KEY = 'MARINE_SEAGRASS_SURVEY_LOGS';
+        let records = [];
+
+        // --- Initialization ---
+        window.onload = function() {
+            checkEnvironment();
+            loadFromLocalStorage();
+            // Start GPS immediately on load if possible
+            startGpsTracking();
+        };
+
+        // --- Environment & Security Check ---
+        function checkEnvironment() {
+            const isHttps = window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+            const banner = document.getElementById('envBanner');
+            
+            if (!isHttps) {
+                banner.className = "rounded-xl p-3 text-xs leading-relaxed border bg-amber-950/60 border-amber-600/70 text-amber-200 block";
+                banner.innerHTML = `
+                    <div class="font-bold flex items-center gap-1.5 mb-1">
+                        <span>⚠️</span> 보안 연결(HTTPS) 아님 안내
+                    </div>
+                    현재 <strong>file://</strong> 또는 일반 http 환경에서는 모바일 브라우저 정책상 스마트폰 GPS가 차단될 수 있습니다. 
+                    <br>동작하지 않을 경우 <strong>[좌표 직접 수동입력]</strong>을 사용하거나, GitHub Pages/호스팅 링크(https://)로 열어주세요.
+                `;
+            }
+        }
+
+        // --- GPS Tracking Engine ---
+        function toggleGpsTracking() {
+            if (isTracking) {
+                stopGpsTracking();
+            } else {
+                startGpsTracking();
+            }
+        }
+
+        function startGpsTracking() {
+            if (!('geolocation' in navigator)) {
+                showNotice('지원 불가', '이 스마트폰 브라우저는 위치 정보(GPS)를 지원하지 않습니다. 수동 입력을 이용하세요.', '❌');
+                return;
+            }
+
+            updateGpsStatusUI('위성 신호 탐색 중...', 'searching');
+
+            const options = {
+                enableHighAccuracy: true, // Request GPS hardware
+                timeout: 15000,
+                maximumAge: 0
+            };
+
+            // 1. One-shot fetch for immediate reaction
+            navigator.geolocation.getCurrentPosition(onGpsSuccess, onGpsError, options);
+
+            // 2. Continuous watch
+            try {
+                if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+                watchId = navigator.geolocation.watchPosition(onGpsSuccess, onGpsError, options);
+                isTracking = true;
+                document.getElementById('btnGpsText').innerText = '실시간 GPS 중지';
+                document.getElementById('btnGpsToggle').className = "mt-3 w-full py-3.5 bg-rose-700 hover:bg-rose-600 rounded-xl font-bold text-sm tracking-wide shadow-lg shadow-rose-950/50 flex items-center justify-center gap-2 tap-active transition-all";
+            } catch (e) {
+                console.error("WatchPosition error", e);
+            }
+        }
+
+        function stopGpsTracking() {
+            if (watchId !== null) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }
+            isTracking = false;
+            updateGpsStatusUI('GPS 중지됨', 'idle');
+            document.getElementById('btnGpsText').innerText = '실시간 GPS 켜기 / 갱신';
+            document.getElementById('btnGpsToggle').className = "mt-3 w-full py-3.5 bg-cyan-600 hover:bg-cyan-500 rounded-xl font-bold text-sm tracking-wide shadow-lg shadow-cyan-950/50 flex items-center justify-center gap-2 tap-active transition-all";
+        }
+
+        function onGpsSuccess(pos) {
+            currentPosition = {
+                lat: pos.coords.latitude,
+                lon: pos.coords.longitude,
+                acc: pos.coords.accuracy,
+                timestamp: pos.timestamp
+            };
+
+            // Update UI elements
+            document.getElementById('liveLat').innerText = currentPosition.lat.toFixed(6);
+            document.getElementById('liveLon').innerText = currentPosition.lon.toFixed(6);
+            
+            const accElem = document.getElementById('liveAcc');
+            const acc = Math.round(currentPosition.acc);
+            accElem.innerText = `±${acc} m`;
+
+            if (acc <= 5) {
+                accElem.className = "font-mono font-bold text-emerald-400";
+                updateGpsStatusUI(`초정밀 수신 (±${acc}m)`, 'locked');
+            } else if (acc <= 15) {
+                accElem.className = "font-mono font-bold text-cyan-300";
+                updateGpsStatusUI(`정상 수신 (±${acc}m)`, 'locked');
+            } else {
+                accElem.className = "font-mono font-bold text-amber-400";
+                updateGpsStatusUI(`오차 다소 큼 (±${acc}m)`, 'warning');
+            }
+        }
+
+        function onGpsError(err) {
+            let msg = '위치 정보를 가져올 수 없습니다.';
+            if (err.code === 1) { // PERMISSION_DENIED
+                msg = '브라우저의 위치 권한이 거부되었습니다. 스마트폰 설정에서 사이트 위치 권한을 허용해주세요.';
+            } else if (err.code === 2) { // POSITION_UNAVAILABLE
+                msg = '위성 신호를 수신할 수 없습니다. 탁 트인 선상에서 다시 시도하세요.';
+            } else if (err.code === 3) { // TIMEOUT
+                msg = '위치 탐색 시간이 초과되었습니다.';
+            }
+            updateGpsStatusUI('수신 실패 / 차단', 'error');
+            console.warn('GPS Error:', err.message);
+        }
+
+        function updateGpsStatusUI(text, state) {
+            const statusLabel = document.getElementById('gpsFixStatus');
+            const dot = document.getElementById('gpsPulseDot');
+            statusLabel.innerText = text;
+
+            dot.className = "w-2.5 h-2.5 rounded-full";
+            if (state === 'locked') {
+                dot.classList.add('bg-emerald-400', 'animate-pulse');
+            } else if (state === 'searching') {
+                dot.classList.add('bg-amber-400', 'animate-ping');
+            } else if (state === 'warning') {
+                dot.classList.add('bg-amber-500');
+            } else if (state === 'error') {
+                dot.classList.add('bg-rose-500');
+            } else {
+                dot.classList.add('bg-slate-500');
+            }
+        }
+
+        // --- Manual Input Toggle ---
+        function toggleManualInput() {
+            const box = document.getElementById('manualInputBox');
+            box.classList.toggle('hidden');
+        }
+
+        // --- Record Management ---
+        function recordStationPoint() {
+            const stationId = document.getElementById('stationId').value.trim() || 'St. Point';
+            const seagrassStatus = document.getElementById('seagrassStatus').value;
+            const fieldNote = document.getElementById('fieldNote').value.trim();
+
+            let lat, lon, acc;
+
+            const manualBox = document.getElementById('manualInputBox');
+            const mLat = parseFloat(document.getElementById('manualLat').value);
+            const mLon = parseFloat(document.getElementById('manualLon').value);
+
+            // Priority: Manual input if filled, otherwise live GPS
+            if (!manualBox.classList.contains('hidden') && !isNaN(mLat) && !isNaN(mLon)) {
+                lat = mLat;
+                lon = mLon;
+                acc = '수동입력';
+            } else if (currentPosition) {
+                lat = currentPosition.lat;
+                lon = currentPosition.lon;
+                acc = Math.round(currentPosition.acc);
+            } else {
+                showNotice('좌표 없음', '현재 수신된 GPS 좌표가 없습니다. [실시간 GPS 켜기]를 누르시거나 [좌표 직접 수동입력]을 활용해주세요.', '⚠️');
+                return;
+            }
+
+            const now = new Date();
+            const timeString = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+
+            const newRecord = {
+                id: Date.now(),
+                station: stationId,
+                timestamp: timeString,
+                lat: typeof lat === 'number' ? lat.toFixed(6) : lat,
+                lon: typeof lon === 'number' ? lon.toFixed(6) : lon,
+                acc: acc,
+                status: seagrassStatus,
+                note: fieldNote || '-'
+            };
+
+            // Prepend new record
+            records.unshift(newRecord);
+            saveToLocalStorage();
+            renderRecords();
+
+            // Auto-increment station ID number (e.g., St.1 -> St.2)
+            autoIncrementStationId(stationId);
+
+            // Clear inputs
+            document.getElementById('fieldNote').value = '';
+            document.getElementById('manualLat').value = '';
+            document.getElementById('manualLon').value = '';
+
+            showNotice('기록 완료', `${stationId} 위치가 성공적으로 저장되었습니다.\n(위도: ${newRecord.lat}, 경도: ${newRecord.lon})`, '✅');
+        }
+
+        function autoIncrementStationId(currentId) {
+            const match = currentId.match(/^(.*?)(\d+)$/);
+            if (match) {
+                const prefix = match[1];
+                const nextNum = parseInt(match[2], 10) + 1;
+                document.getElementById('stationId').value = `${prefix}${nextNum}`;
+            }
+        }
+
+        function renderRecords() {
+            const container = document.getElementById('recordsContainer');
+            const summary = document.getElementById('logSummary');
+            const badge = document.getElementById('storageCountBadge');
+
+            summary.innerText = `${records.length}건`;
+            badge.innerText = `${records.length}개 저장됨`;
+
+            if (records.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-8 text-xs text-slate-500">
+                        아직 저장된 정점이 없습니다.<br>위 버튼을 눌러 첫 번째 정점을 기록하세요.
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = records.map((r, idx) => `
+                <div class="p-3 bg-slate-900/90 border border-slate-700/80 rounded-xl space-y-1.5 text-xs relative">
+                    <div class="flex items-center justify-between">
+                        <span class="font-bold text-cyan-300 text-sm">${r.station}</span>
+                        <div class="flex items-center gap-2">
+                            <span class="text-[10px] text-slate-400 font-mono">${r.timestamp}</span>
+                            <button onclick="deleteRecord(${r.id})" class="text-slate-500 hover:text-rose-400 p-1">✕</button>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-1 text-[11px] font-mono bg-slate-950/60 p-1.5 rounded-lg border border-slate-800">
+                        <div>위도: <span class="text-slate-200">${r.lat}</span></div>
+                        <div>경도: <span class="text-slate-200">${r.lon}</span></div>
+                        <div class="col-span-2 text-slate-400">오차범위: <span class="text-amber-400">${typeof r.acc === 'number' ? `±${r.acc}m` : r.acc}</span></div>
+                    </div>
+                    <div class="flex items-center gap-1.5 pt-0.5">
+                        <span class="px-2 py-0.5 bg-cyan-950 text-cyan-300 rounded text-[10px] border border-cyan-800/60 font-semibold">${r.status}</span>
+                        <span class="text-slate-300 truncate text-[11px]">${r.note}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function deleteRecord(id) {
+            records = records.filter(item => item.id !== id);
+            saveToLocalStorage();
+            renderRecords();
+        }
+
+        function confirmClearRecords() {
+            if (records.length === 0) return;
+            showConfirm(
+                '전체 데이터 삭제',
+                '저장된 모든 정점 데이터를 정말 삭제하시겠습니까? (삭제 전 CSV 내보내기를 권장합니다)',
+                () => {
+                    records = [];
+                    saveToLocalStorage();
+                    renderRecords();
+                }
+            );
+        }
+
+        // --- Local Storage Sync ---
+        function saveToLocalStorage() {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+            } catch (e) {
+                console.error("Local storage save error", e);
+            }
+        }
+
+        function loadFromLocalStorage() {
+            try {
+                const data = localStorage.getItem(STORAGE_KEY);
+                if (data) {
+                    records = JSON.parse(data);
+                    renderRecords();
+                }
+            } catch (e) {
+                console.error("Local storage load error", e);
+            }
+        }
+
+        // --- Reliable CSV Export (with UTF-8 BOM) ---
+        function exportToCSV() {
+            if (records.length === 0) {
+                showNotice('내보낼 데이터 없음', '저장된 정점이 없습니다. 먼저 위치를 저장해주세요.', 'ℹ️');
+                return;
+            }
+
+            // UTF-8 BOM for Microsoft Excel Korean support
+            const BOM = '\uFEFF';
+            const headers = ['정점명', '기록일시', '위도(Latitude)', '경도(Longitude)', '오차(m)', '잘피상태', '현장메모'];
+            
+            const rows = records.map(r => [
+                `"${r.station}"`,
+                `"${r.timestamp}"`,
+                r.lat,
+                r.lon,
+                typeof r.acc === 'number' ? r.acc : `"${r.acc}"`,
+                `"${r.status}"`,
+                `"${(r.note || '').replace(/"/g, '""')}"`
+            ]);
+
+            const csvContent = BOM + [headers.join(','), ...rows.map(row => row.join(','))].join('\r\n');
+            
+            try {
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const fileName = `잘피모니터링_GPS기록_${new Date().toISOString().slice(0,10)}.csv`;
+
+                // Anchor download method
+                const link = document.createElement('a');
+                if (link.download !== undefined) {
+                    const url = URL.createObjectURL(blob);
+                    link.setAttribute('href', url);
+                    link.setAttribute('download', fileName);
+                    link.style.visibility = 'hidden';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                    showNotice('내보내기 완료', `${fileName} 파일이 기기에 다운로드되었습니다.`, '📥');
+                }
+            } catch (err) {
+                showNotice('오류', 'CSV 생성 중 문제가 발생했습니다: ' + err.message, '❌');
+            }
+        }
+
+        // --- In-App Modal Alert (Replacement for window.alert / confirm) ---
+        function showNotice(title, msg, icon = 'ℹ️') {
+            const modal = document.getElementById('noticeModal');
+            document.getElementById('noticeTitle').innerText = title;
+            document.getElementById('noticeMsg').innerText = msg;
+            document.getElementById('noticeIcon').innerText = icon;
+            document.getElementById('noticeActions').innerHTML = `
+                <button onclick="closeNoticeModal()" class="w-full py-2.5 bg-cyan-600 rounded-xl text-xs font-bold text-white tap-active">확인</button>
+            `;
+            modal.classList.remove('hidden');
+        }
+
+        function showConfirm(title, msg, onConfirm) {
+            const modal = document.getElementById('noticeModal');
+            document.getElementById('noticeTitle').innerText = title;
+            document.getElementById('noticeMsg').innerText = msg;
+            document.getElementById('noticeIcon').innerText = '⚠️';
+            document.getElementById('noticeActions').innerHTML = `
+                <div class="grid grid-cols-2 gap-2">
+                    <button onclick="closeNoticeModal()" class="w-full py-2.5 bg-slate-700 rounded-xl text-xs font-bold text-slate-300 tap-active">취소</button>
+                    <button id="modalConfirmBtn" class="w-full py-2.5 bg-rose-600 rounded-xl text-xs font-bold text-white tap-active">삭제</button>
+                </div>
+            `;
+            document.getElementById('modalConfirmBtn').onclick = () => {
+                closeNoticeModal();
+                onConfirm();
+            };
+            modal.classList.remove('hidden');
+        }
+
+        function closeNoticeModal() {
+            document.getElementById('noticeModal').classList.add('hidden');
+        }
+    </script>
+</body>
+</html>
