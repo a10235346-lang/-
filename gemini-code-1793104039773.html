@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>연안 측지 및 식재 구역 실시간 매핑</title>
+    <!-- Leaflet 지도 라이브러리 (무료 오픈소스) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #eef2f6; color: #333; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        
+        /* 상단 실시간 GPS 바 */
+        #gps-bar { background: #1a252f; color: #fff; padding: 10px 14px; font-size: 0.85rem; display: flex; justify-content: space-between; align-items: center; z-index: 1000; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+        .acc-pill { padding: 3px 8px; border-radius: 12px; font-weight: bold; font-size: 0.75rem; background: #e74c3c; }
+        .acc-good { background: #2ecc71; }
+
+        /* 지도 영역 */
+        #map { flex: 1; width: 100%; z-index: 1; }
+
+        /* 하단 컨트롤 패널 */
+        #panel { background: #ffffff; padding: 12px 14px; border-top-left-radius: 16px; border-top-right-radius: 16px; box-shadow: 0 -4px 15px rgba(0,0,0,0.1); z-index: 1000; max-height: 48vh; overflow-y: auto; }
+        
+        .area-display { background: #e8f4fd; border: 1px solid #b8daff; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .area-val { font-size: 1.15rem; font-weight: bold; color: #0056b3; }
+
+        .type-selector { display: flex; gap: 6px; margin-bottom: 8px; }
+        .type-btn { flex: 1; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; font-size: 0.85rem; font-weight: bold; color: #475569; cursor: pointer; }
+        .type-btn.active { background: #0066cc; color: #fff; border-color: #0066cc; }
+
+        input[type="text"] { width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.9rem; margin-bottom: 8px; }
+
+        .action-row { display: flex; gap: 8px; margin-bottom: 8px; }
+        .btn-main { flex: 2; background: #0066cc; color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: bold; font-size: 0.95rem; cursor: pointer; }
+        .btn-undo { flex: 1; background: #64748b; color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: bold; font-size: 0.85rem; cursor: pointer; }
+
+        .export-row { display: flex; gap: 6px; }
+        .btn-sub { flex: 1; background: #10b981; color: #fff; border: none; padding: 8px; border-radius: 6px; font-size: 0.8rem; font-weight: bold; cursor: pointer; text-align: center; }
+        .btn-kml { background: #f59e0b; }
+        .btn-clear { background: #ef4444; }
+    </style>
+</head>
+<body>
+
+    <!-- 1. GPS 실시간 상태바 -->
+    <div id="gps-bar">
+        <div>
+            <span id="coords-text">GPS 위성 수신 대기 중...</span>
+        </div>
+        <div id="acc-tag" class="acc-pill">수신중</div>
+    </div>
+
+    <!-- 2. 실시간 연결 지도 -->
+    <div id="map"></div>
+
+    <!-- 3. 하단 실시간 제어 패널 -->
+    <div id="panel">
+        <!-- 실시간 산출 면적 -->
+        <div class="area-display">
+            <span>식재 구역 실측 면적:</span>
+            <span class="area-val" id="area-text">0 m²</span>
+        </div>
+
+        <!-- 정점 유형 분류 탭 -->
+        <div class="type-selector">
+            <button type="button" class="type-btn active" id="btn-type-poly" onclick="setType('poly')">🟢 식재구역 테두리(선연결)</button>
+            <button type="button" class="type-btn" id="btn-type-obs" onclick="setType('obs')">🔴 단독 장애물/포인트</button>
+        </div>
+
+        <input type="text" id="memo-input" placeholder="메모 입력 (예: 모래질 양호, 수심 1.5m / 사석 무더기)" />
+
+        <div class="action-row">
+            <button class="btn-main" onclick="recordPoint()">📍 현재 정점 기록</button>
+            <button class="btn-undo" onclick="undoLastPoint()">↩ 직전 취소</button>
+        </div>
+
+        <!-- 파일 내보내기 버튼들 -->
+        <div class="export-row">
+            <button class="btn-sub btn-kml" onclick="exportKML()">🌐 구글어스(KML)</button>
+            <button class="btn-sub" onclick="exportCSV()">📊 엑셀(CSV)</button>
+            <button class="btn-sub btn-clear" onclick="clearAllData()">🗑 초기화</button>
+        </div>
+    </div>
+
+    <script>
+        // 전역 상태
+        let currentPos = null;
+        let activeType = 'poly'; // 'poly' or 'obs'
+        let polyPoints = [];     // 면적 다각형 점 배열 [ {lat, lon, memo, time} ]
+        let obsPoints = [];      // 단독 장애물 점 배열 [ {lat, lon, memo, time} ]
+
+        // Leaflet 지도 초기화 (오픈스트리트맵 및 위성 레이어)
+        const map = L.map('map', { zoomControl: false }).setView([34.84, 128.43], 15);
+        
+        // Esri World Imagery (위성지도) 레이어
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            maxZoom: 19,
+            attribution: 'Esri Satellite'
+        }).addTo(map);
+
+        // 지도 레이어 객체
+        let myLocationMarker = null;
+        let polylineLayer = L.polyline([], { color: '#00e5ff', weight: 3, dashArray: '5, 5' }).addTo(map);
+        let polygonLayer = L.polygon([], { color: '#00e676', fillColor: '#00e676', fillOpacity: 0.35, weight: 2 }).addTo(map);
+        let markerGroup = L.layerGroup().addTo(map);
+
+        // 정점 유형 선택
+        function setType(type) {
+            activeType = type;
+            document.getElementById('btn-type-poly').classList.toggle('active', type === 'poly');
+            document.getElementById('btn-type-obs').classList.toggle('active', type === 'obs');
+            const memoField = document.getElementById('memo-input');
+            if (type === 'poly') {
+                memoField.placeholder = "식재 구역 모퉁이 (예: 북서쪽 모서리, 모래질)";
+            } else {
+                memoField.placeholder = "장애물 (예: 사석 유실 40cm, 수거불가 폐그물)";
+            }
+        }
+
+        // 1. 실시간 위치 추적 (watchPosition)
+        if (navigator.geolocation) {
+            navigator.geolocation.watchPosition(pos => {
+                const { latitude, longitude, accuracy } = pos.coords;
+                currentPos = { lat: latitude, lon: longitude, acc: accuracy };
+
+                // 상단 상태바 업데이트
+                document.getElementById('coords-text').innerText = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+                const accTag = document.getElementById('acc-tag');
+                accTag.innerText = `±${Math.round(accuracy)}m`;
+                accTag.classList.toggle('acc-good', accuracy <= 6);
+
+                // 현재 내 위치 마커 표시
+                const latlng = [latitude, longitude];
+                if (!myLocationMarker) {
+                    myLocationMarker = L.circleMarker(latlng, { radius: 7, color: '#ffffff', fillColor: '#007aff', fillOpacity: 1, weight: 2 }).addTo(map);
+                    map.setView(latlng, 17);
+                } else {
+                    myLocationMarker.setLatLng(latlng);
+                }
+            }, err => {
+                document.getElementById('coords-text').innerText = "GPS 신호 수신 실패 (위치 권한 확인)";
+            }, { enableHighAccuracy: true, maximumAge: 1000 });
+        }
+
+        // 2. 현재 정점 저장 & 선 자동 연결
+        function recordPoint() {
+            if (!currentPos) {
+                alert("GPS 신호를 아직 수신하지 못했습니다.");
+                return;
+            }
+
+            const memo = document.getElementById('memo-input').value.trim();
+            const time = new Date().toLocaleTimeString();
+            const pt = { lat: currentPos.lat, lon: currentPos.lon, memo, time, type: activeType };
+
+            if (activeType === 'poly') {
+                polyPoints.push(pt);
+            } else {
+                obsPoints.push(pt);
+            }
+
+            document.getElementById('memo-input').value = '';
+            redrawMapElements();
+            saveToStorage();
+        }
+
+        // 3. 지도 및 폴리곤/면적 다시 그리기
+        function redrawMapElements() {
+            markerGroup.clearLayers();
+
+            // 식재 구역 다각형 연결
+            const polyLatLngs = polyPoints.map(p => [p.lat, p.lon]);
+            polygonLayer.setLatLngs(polyLatLngs);
+
+            // 각 정점 번호 마커 표시
+            polyPoints.forEach((p, idx) => {
+                const marker = L.circleMarker([p.lat, p.lon], { radius: 5, color: '#004d40', fillColor: '#00e676', fillOpacity: 1, weight: 2 });
+                marker.bindPopup(`<b>식재 정점 #${idx + 1}</b><br>${p.memo || '메모 없음'}<br><small>${p.time}</small>`);
+                markerGroup.addLayer(marker);
+            });
+
+            // 장애물 마커 표시 (빨간색)
+            obsPoints.forEach((p, idx) => {
+                const marker = L.circleMarker([p.lat, p.lon], { radius: 6, color: '#ffffff', fillColor: '#ff1744', fillOpacity: 1, weight: 2 });
+                marker.bindPopup(`<b>⚠️ 장애물 #${idx + 1}</b><br>${p.memo || '메모 없음'}<br><small>${p.time}</small>`);
+                markerGroup.addLayer(marker);
+            });
+
+            // 면적 계산 (점 3개 이상일 때)
+            if (polyPoints.length >= 3) {
+                const areaM2 = calculatePolygonArea(polyPoints);
+                document.getElementById('area-text').innerText = `${areaM2.toLocaleString()} m²`;
+            } else {
+                document.getElementById('area-text').innerText = `0 m² (점 ${polyPoints.length}/3)`;
+            }
+        }
+
+        // 측지학적 폴리곤 면적 계산 (단위: m²)
+        function calculatePolygonArea(coords) {
+            const rad = Math.PI / 180;
+            const radius = 6378137; // 지구 반경 (WGS84)
+            let area = 0;
+            if (coords.length < 3) return 0;
+
+            for (let i = 0; i < coords.length; i++) {
+                const p1 = coords[i];
+                const p2 = coords[(i + 1) % coords.length];
+                area += (p2.lon * rad - p1.lon * rad) * (2 + Math.sin(p1.lat * rad) + Math.sin(p2.lat * rad));
+            }
+            area = Math.abs(area * radius * radius / 2.0);
+            return Math.round(area * 10) / 10;
+        }
+
+        // 직전 정점 취소
+        function undoLastPoint() {
+            if (activeType === 'poly' && polyPoints.length > 0) {
+                polyPoints.pop();
+            } else if (activeType === 'obs' && obsPoints.length > 0) {
+                obsPoints.pop();
+            }
+            redrawMapElements();
+            saveToStorage();
+        }
+
+        // 로컬스토리지 저장
+        function saveToStorage() {
+            localStorage.setItem('survey_poly', JSON.stringify(polyPoints));
+            localStorage.setItem('survey_obs', JSON.stringify(obsPoints));
+        }
+
+        // 복구 불러오기
+        window.addEventListener('load', () => {
+            const savedPoly = localStorage.getItem('survey_poly');
+            const savedObs = localStorage.getItem('survey_obs');
+            if (savedPoly) polyPoints = JSON.parse(savedPoly);
+            if (savedObs) obsPoints = JSON.parse(savedObs);
+            redrawMapElements();
+        });
+
+        // 4. 구글 어스용 KML 내보내기 (선 꼬임 없는 완전한 Polygon 파일)
+        function exportKML() {
+            if (polyPoints.length === 0 && obsPoints.length === 0) {
+                alert("내보낼 데이터가 없습니다.");
+                return;
+            }
+
+            let polyKml = '';
+            if (polyPoints.length >= 3) {
+                const closedCoords = [...polyPoints, polyPoints[0]].map(p => `${p.lon},${p.lat},0`).join(' ');
+                polyKml = `
+                <Placemark>
+                    <name>식재 대상 구역 실측면적</name>
+                    <Style>
+                        <PolyStyle><color>7d00ff00</color><outline>1</outline></PolyStyle>
+                        <LineStyle><color>ff00ff00</color><width>3</width></LineStyle>
+                    </Style>
+                    <Polygon>
+                        <outerBoundaryIs><LinearRing><coordinates>${closedCoords}</coordinates></LinearRing></outerBoundaryIs>
+                    </Polygon>
+                </Placemark>`;
+            }
+
+            let obsKml = obsPoints.map((p, i) => `
+                <Placemark>
+                    <name>장애물 #${i + 1} (${p.memo})</name>
+                    <Point><coordinates>${p.lon},${p.lat},0</coordinates></Point>
+                </Placemark>
+            `).join('');
+
+            const kmlContent = `<?xml version="1.0" encoding="UTF-8"?>
+            <kml xmlns="http://www.opengis.net/kml/2.2">
+                <Document>
+                    <name>석방렴 외측 조사 결과</name>
+                    ${polyKml}
+                    ${obsKml}
+                </Document>
+            </kml>`;
+
+            downloadFile(kmlContent, 'survey_polygon.kml', 'application/vnd.google-earth.kml+xml');
+        }
+
+        // 5. 엑셀 CSV 내보내기
+        function exportCSV() {
+            let csv = '\uFEFF구분,정점번호,시간,위도,경도,메모\n';
+            polyPoints.forEach((p, i) => {
+                csv += `식재구역테두리,${i + 1},"${p.time}",${p.lat},${p.lon},"${p.memo}"\n`;
+            });
+            obsPoints.forEach((p, i) => {
+                csv += `장애물,${i + 1},"${p.time}",${p.lat},${p.lon},"${p.memo}"\n`;
+            });
+            downloadFile(csv, 'survey_data.csv', 'text/csv;charset=utf-8;');
+        }
+
+        function downloadFile(content, fileName, mimeType) {
+            const blob = new Blob([content], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            a.click();
+        }
+
+        function clearAllData() {
+            if (confirm("모든 기록을 삭제하고 초기화하시겠습니까?")) {
+                polyPoints = [];
+                obsPoints = [];
+                saveToStorage();
+                redrawMapElements();
+            }
+        }
+    </script>
+</body>
+</html>
